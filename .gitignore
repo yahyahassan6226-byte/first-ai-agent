@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Virtual environments
+.venv/
+venv/
+
+# VS Code
+.vscode/
+
+# Ignore PDF files in documents
+documents/*.pdf

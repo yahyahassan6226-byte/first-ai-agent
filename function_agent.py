@@ -3,6 +3,7 @@ import json
 from openai import OpenAI
 
 from tools.calculator import calculator
+from tools.pdf_tool import read_pdf
 from tools.random_tool import random_number
 from tools.time_tool import current_time
 from tools.weather_tool import get_weather
@@ -55,7 +56,7 @@ tools = [
         "type": "function",
         "name": "get_weather",
         "description": (
-            "Get the current weather for a city. Use this when the user "
+            "Get the current weather for a city. Use this tool when the user "
             "asks about temperature, humidity, wind, or current conditions."
         ),
         "parameters": {
@@ -70,6 +71,30 @@ tools = [
                 }
             },
             "required": ["city"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "read_pdf",
+        "description": (
+            "Read and extract text from a PDF file located in the local "
+            "documents folder. Always use this tool when the user asks to "
+            "read, summarize, inspect, or answer questions about a named PDF."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_name": {
+                    "type": "string",
+                    "description": (
+                        "The exact PDF filename including .pdf, such as "
+                        "'ROLE OF MARKETING STRATEGIES.pdf'."
+                    ),
+                }
+            },
+            "required": ["file_name"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -92,6 +117,9 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
     if tool_name == "get_weather":
         return get_weather(arguments["city"])
 
+    if tool_name == "read_pdf":
+        return read_pdf(arguments["file_name"])
+
     return f"Error: Tool aan la aqoon: {tool_name}"
 
 
@@ -109,11 +137,15 @@ def ask_agent(user_message: str) -> str:
         model="gpt-5.1",
         instructions=(
             "You are a helpful AI assistant. "
-            "Use the available tools when they are needed. "
-            "Respond clearly in the same language as the user."
+            "Use the available tools when needed. "
+            "When the user asks about a named PDF, always use read_pdf. "
+            "Answer PDF questions using only the extracted PDF content. "
+            "If the answer is not present in the PDF, say so clearly. "
+            "Respond in the same language as the user."
         ),
         input=conversation,
         tools=tools,
+        tool_choice="auto",
     )
 
     conversation.extend(response.output)
@@ -151,6 +183,7 @@ def ask_agent(user_message: str) -> str:
         model="gpt-5.1",
         instructions=(
             "Use the tool result to answer the user clearly. "
+            "For PDF questions, rely only on the extracted PDF content. "
             "Respond in the same language as the user."
         ),
         input=conversation,
