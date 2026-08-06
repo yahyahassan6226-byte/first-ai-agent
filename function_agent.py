@@ -99,11 +99,14 @@ tools = [
         },
         "strict": True,
     },
+    {
+        "type": "web_search",
+    },
 ]
 
 
 def execute_tool(tool_name: str, arguments: dict) -> str:
-    """Fulinta tool-ka uu GPT doortay."""
+    """Fulinta custom Python tool-ka uu GPT doortay."""
 
     if tool_name == "calculator":
         return calculator(arguments["expression"])
@@ -124,7 +127,7 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
 
 
 def ask_agent(user_message: str) -> str:
-    """User-ka u dir GPT, fuli tool-ka, kadibna keen jawaabta ugu dambaysa."""
+    """U dir user message-ka GPT, fuli tools-ka, kadib keen jawaabta."""
 
     conversation = [
         {
@@ -138,6 +141,8 @@ def ask_agent(user_message: str) -> str:
         instructions=(
             "You are a helpful AI assistant. "
             "Use the available tools when needed. "
+            "Use web search when the user requests current, recent, latest, "
+            "today's, news-related, or internet-based information. "
             "When the user asks about a named PDF, always use read_pdf. "
             "Answer PDF questions using only the extracted PDF content. "
             "If the answer is not present in the PDF, say so clearly. "
@@ -149,13 +154,19 @@ def ask_agent(user_message: str) -> str:
     )
 
     conversation.extend(response.output)
-    tool_called = False
+    custom_tool_called = False
 
+    # Web Search waxaa fulinaya OpenAI, ee Python ma fulinayo.
+    for item in response.output:
+        if item.type == "web_search_call":
+            print("\n🌐 Web Search ayaa la isticmaalay.")
+
+    # Custom tools waxaa fulinaya Python.
     for item in response.output:
         if item.type != "function_call":
             continue
 
-        tool_called = True
+        custom_tool_called = True
 
         try:
             arguments = json.loads(item.arguments)
@@ -176,9 +187,13 @@ def ask_agent(user_message: str) -> str:
             }
         )
 
-    if not tool_called:
+    # Haddii Web Search keliya la isticmaalay ama tool aan loo baahnayn,
+    # jawaabta ugu dambaysa waxay horay ugu jirtaa response.output_text.
+    if not custom_tool_called:
         return response.output_text
 
+    # Haddii custom Python tool la isticmaalay,
+    # result-ka dib ugu dir GPT si uu jawaab dabiici ah u sameeyo.
     final_response = client.responses.create(
         model="gpt-5.1",
         instructions=(
