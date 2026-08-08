@@ -7,9 +7,17 @@ from tools.pdf_tool import read_pdf
 from tools.random_tool import random_number
 from tools.time_tool import current_time
 from tools.weather_tool import get_weather
+from tools.memory_tool import (
+    save_memory,
+    get_memory,
+    list_memories,
+)
 
 
 client = OpenAI()
+
+# Short-term conversation memory
+conversation = []
 
 
 tools = [
@@ -100,6 +108,59 @@ tools = [
         "strict": True,
     },
     {
+        "type": "function",
+        "name": "save_memory",
+        "description": (
+            "Save an important stable user fact or preference for future "
+            "conversations. Use this when the user explicitly asks you "
+            "to remember something."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Short memory key, such as favorite_language.",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The value to remember.",
+                },
+            },
+            "required": ["key", "value"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "get_memory",
+        "description": "Retrieve a previously saved memory by key.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The memory key to retrieve.",
+                }
+            },
+            "required": ["key"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "list_memories",
+        "description": "List all memories saved in the local SQLite database.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
         "type": "web_search",
     },
 ]
@@ -123,29 +184,50 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
     if tool_name == "read_pdf":
         return read_pdf(arguments["file_name"])
 
+    if tool_name == "save_memory":
+        return save_memory(
+            arguments["key"],
+            arguments["value"],
+        )
+
+    if tool_name == "get_memory":
+        return get_memory(
+            arguments["key"],
+        )
+
+    if tool_name == "list_memories":
+        return list_memories()
+
     return f"Error: Tool aan la aqoon: {tool_name}"
 
 
 def ask_agent(user_message: str) -> str:
-    """U dir user message-ka GPT, fuli tools-ka, kadib keen jawaabta."""
+    """U dir fariinta GPT iyadoo conversation history la ilaalinayo."""
 
-    conversation = [
+    conversation.append(
         {
             "role": "user",
             "content": user_message,
         }
-    ]
+    )
 
     response = client.responses.create(
         model="gpt-5.1",
         instructions=(
             "You are a helpful AI assistant. "
-            "Use the available tools when needed. "
-            "Use web search when the user requests current, recent, latest, "
-            "today's, news-related, or internet-based information. "
-            "When the user asks about a named PDF, always use read_pdf. "
+            "Use conversation history to understand follow-up questions. "
+            "Use the available tools whenever needed. "
+            "Use web search for current, recent, latest, today's, "
+            "news-related, or internet-based information. "
+            "When the user asks about a named PDF, use read_pdf. "
             "Answer PDF questions using only the extracted PDF content. "
-            "If the answer is not present in the PDF, say so clearly. "
+            "If the PDF does not contain the answer, say so clearly. "
+            "Use save_memory only when the user explicitly asks you to "
+            "remember a stable fact or preference. "
+            "Use get_memory or list_memories when the user asks about "
+            "something that may have been saved previously. "
+            "Never save passwords, API keys, authentication tokens, "
+            "or other secrets. "
             "Respond in the same language as the user."
         ),
         input=conversation,
@@ -153,15 +235,17 @@ def ask_agent(user_message: str) -> str:
         tool_choice="auto",
     )
 
+    # Save the model's first response/tool requests in conversation history
     conversation.extend(response.output)
+
     custom_tool_called = False
 
-    # Web Search waxaa fulinaya OpenAI, ee Python ma fulinayo.
+    # Hosted web search is executed by OpenAI
     for item in response.output:
         if item.type == "web_search_call":
             print("\n🌐 Web Search ayaa la isticmaalay.")
 
-    # Custom tools waxaa fulinaya Python.
+    # Custom Python tools
     for item in response.output:
         if item.type != "function_call":
             continue
@@ -175,6 +259,9 @@ def ask_agent(user_message: str) -> str:
         except (json.JSONDecodeError, KeyError, TypeError) as error:
             result = f"Tool error: {error}"
 
+        except Exception as error:
+            result = f"Tool execution error: {error}"
+
         print(f"\n🔧 Tool: {item.name}")
         print(f"📥 Arguments: {item.arguments}")
         print(f"📤 Result: {result}")
@@ -187,30 +274,36 @@ def ask_agent(user_message: str) -> str:
             }
         )
 
-    # Haddii Web Search keliya la isticmaalay ama tool aan loo baahnayn,
-    # jawaabta ugu dambaysa waxay horay ugu jirtaa response.output_text.
+    # If no custom Python tool was called,
+    # the final answer is already available.
     if not custom_tool_called:
         return response.output_text
 
-    # Haddii custom Python tool la isticmaalay,
-    # result-ka dib ugu dir GPT si uu jawaab dabiici ah u sameeyo.
+    # Send custom tool results back to GPT
     final_response = client.responses.create(
         model="gpt-5.1",
         instructions=(
-            "Use the tool result to answer the user clearly. "
+            "Use the tool result and conversation history to answer clearly. "
             "For PDF questions, rely only on the extracted PDF content. "
+            "For memory questions, rely on the returned database result. "
             "Respond in the same language as the user."
         ),
         input=conversation,
         tools=tools,
+        tool_choice="auto",
     )
+
+    # Save final assistant answer in short-term conversation memory
+    conversation.extend(final_response.output)
 
     return final_response.output_text
 
 
 def main() -> None:
     print("🤖 AI Agent waa diyaar!")
-    print("Qor 'exit' si aad uga baxdo.\n")
+    print("Commands:")
+    print("  exit   -> ka bax")
+    print("  /clear -> nadiifi conversation memory\n")
 
     while True:
         user_message = input("Adiga: ").strip()
@@ -218,6 +311,11 @@ def main() -> None:
         if user_message.lower() == "exit":
             print("Nabadgelyo!")
             break
+
+        if user_message.lower() == "/clear":
+            conversation.clear()
+            print("🧹 Conversation memory waa la nadiifiyay.\n")
+            continue
 
         if not user_message:
             print("Fadlan wax qor.\n")
