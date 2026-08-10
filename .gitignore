@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 
 # Environment variables
 .env
@@ -12,5 +13,13 @@ venv/
 # VS Code
 .vscode/
 
-# Ignore PDF files in documents
+# Google OAuth / Gmail secrets
+credentials.json
+token.json
+
+# Local databases
+memory.db
+chroma_db/
+
+# Private PDF documents
 documents/*.pdf
