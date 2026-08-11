@@ -1,5 +1,5 @@
-# config.py
-
 MODEL = "gpt-5.1"
 
 MAX_EMAIL_RESULTS = 20
+
+MAX_AGENT_STEPS = 8
