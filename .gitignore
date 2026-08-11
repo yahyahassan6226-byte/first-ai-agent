@@ -1,9 +1,8 @@
 # Python
 __pycache__/
 *.pyc
-*.pyo
 
-# Environment variables
+# Environment
 .env
 
 # Virtual environments
@@ -13,13 +12,15 @@ venv/
 # VS Code
 .vscode/
 
-# Google OAuth / Gmail secrets
+# Google OAuth secrets
 credentials.json
 token.json
 
-# Local databases
-memory.db
+# Local RAG documents
+documents/
+
+# Chroma database
 chroma_db/
 
-# Private PDF documents
-documents/*.pdf
+# LangChain persistent memory
+langchain_memory.db*
