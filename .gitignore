@@ -24,3 +24,6 @@ chroma_db/
 
 # LangChain persistent memory
 langchain_memory.db*
+
+# LangGraph persistent memory
+langgraph_memory.db*

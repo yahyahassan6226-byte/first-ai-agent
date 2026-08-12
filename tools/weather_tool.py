@@ -1,95 +1,281 @@
 import os
 
 import requests
+from dotenv import load_dotenv
 
 
-GEOCODING_URL = "https://api.openweathermap.org/geo/1.0/direct"
-CURRENT_WEATHER_URL = "https://api.openweathermap.org/data/2.5/weather"
+# =========================================================
+# LOAD ENVIRONMENT VARIABLES
+# =========================================================
 
+load_dotenv()
+
+
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
+OPENWEATHER_API_KEY = (
+    os.getenv("OPENWEATHER_API_KEY")
+    or os.getenv("WEATHER_API_KEY")
+)
+
+OPENWEATHER_URL = (
+    "https://api.openweathermap.org/data/2.5/weather"
+)
+
+REQUEST_TIMEOUT = 10
+
+
+# =========================================================
+# WEATHER TOOL
+# =========================================================
 
 def get_weather(city: str) -> str:
-    """Soo qaad cimilada hadda jirta ee magaalada la siiyay."""
+    """
+    Soo hel cimilada hadda ee magaalo.
 
-    api_key = os.getenv("WEATHER_API_KEY")
+    Args:
+        city:
+            Magaca magaalada.
+            Tusaale:
+            "Mogadishu"
+            "Garowe"
+            "Nairobi"
+            "Mogadishu, SO"
 
-    if not api_key:
-        return "Error: WEATHER_API_KEY lama helin."
+    Returns:
+        Weather information string.
+    """
+
+    # -----------------------------------------------------
+    # VALIDATE CITY
+    # -----------------------------------------------------
+
+    if not isinstance(city, str):
+        return (
+            "Weather error: city waa inuu noqdaa string."
+        )
 
     city = city.strip()
 
     if not city:
-        return "Error: Magaca magaalada lama bixin."
+        return (
+            "Weather error: Magaca magaalada lama bixin."
+        )
+
+    # -----------------------------------------------------
+    # CHECK API KEY
+    # -----------------------------------------------------
+
+    if not OPENWEATHER_API_KEY:
+        return (
+            "Weather error: API key lama helin.\n"
+            "Ku dar .env file-ka:\n"
+            "OPENWEATHER_API_KEY=your_api_key"
+        )
+
+    # -----------------------------------------------------
+    # REQUEST PARAMETERS
+    # -----------------------------------------------------
+
+    params = {
+        "q": city,
+        "appid": OPENWEATHER_API_KEY,
+        "units": "metric",
+    }
+
+    # -----------------------------------------------------
+    # CALL WEATHER API
+    # -----------------------------------------------------
 
     try:
-        # 1. Magaca magaalada u beddel latitude iyo longitude.
-        geocoding_response = requests.get(
-            GEOCODING_URL,
-            params={
-                "q": city,
-                "limit": 1,
-                "appid": api_key,
-            },
-            timeout=10,
-        )
-        geocoding_response.raise_for_status()
-
-        locations = geocoding_response.json()
-
-        if not locations:
-            return f"Error: Magaalada '{city}' lama helin."
-
-        location = locations[0]
-        latitude = location["lat"]
-        longitude = location["lon"]
-        location_name = location["name"]
-        country = location.get("country", "Unknown")
-
-        # 2. Coordinates-ka ku soo qaad cimilada hadda jirta.
-        weather_response = requests.get(
-            CURRENT_WEATHER_URL,
-            params={
-                "lat": latitude,
-                "lon": longitude,
-                "appid": api_key,
-                "units": "metric",
-            },
-            timeout=10,
-        )
-        weather_response.raise_for_status()
-
-        data = weather_response.json()
-
-        temperature = data["main"]["temp"]
-        feels_like = data["main"]["feels_like"]
-        humidity = data["main"]["humidity"]
-        description = data["weather"][0]["description"]
-        wind_speed = data["wind"]["speed"]
-
-        return (
-            f"Location: {location_name}, {country}\n"
-            f"Temperature: {temperature}°C\n"
-            f"Feels like: {feels_like}°C\n"
-            f"Condition: {description}\n"
-            f"Humidity: {humidity}%\n"
-            f"Wind speed: {wind_speed} m/s"
+        response = requests.get(
+            OPENWEATHER_URL,
+            params=params,
+            timeout=REQUEST_TIMEOUT,
         )
 
     except requests.Timeout:
-        return "Error: Weather API-ga waqtigii ayuu dhaafay."
+        return (
+            "Weather error: Weather API-ga "
+            "waqtigii ayuu dhaafay."
+        )
 
-    except requests.HTTPError as error:
-        status_code = error.response.status_code
-
-        if status_code == 401:
-            return "Error: Weather API key-ga ma shaqaynayo."
-
-        if status_code == 429:
-            return "Error: Weather API request limit ayaa la gaaray."
-
-        return f"Weather API error: HTTP {status_code}"
+    except requests.ConnectionError:
+        return (
+            "Weather error: Internet connection "
+            "lama heli karo."
+        )
 
     except requests.RequestException as error:
-        return f"Network error: {error}"
+        return (
+            f"Weather request error: {error}"
+        )
 
-    except (KeyError, IndexError, TypeError):
-        return "Error: Weather API wuxuu soo celiyay xog aan la filayn."
+    # -----------------------------------------------------
+    # HANDLE HTTP ERRORS
+    # -----------------------------------------------------
+
+    if response.status_code == 401:
+        return (
+            "Weather error: API key-ga ma saxna "
+            "ama lama oggola."
+        )
+
+    if response.status_code == 404:
+        return (
+            f"Weather error: Magaalada '{city}' "
+            "lama helin."
+        )
+
+    if response.status_code == 429:
+        return (
+            "Weather error: API request limit "
+            "ayaa la gaaray."
+        )
+
+    if response.status_code != 200:
+        return (
+            "Weather error: API-gu wuxuu soo celiyay "
+            f"HTTP {response.status_code}."
+        )
+
+    # -----------------------------------------------------
+    # PARSE JSON
+    # -----------------------------------------------------
+
+    try:
+        data = response.json()
+
+    except ValueError:
+        return (
+            "Weather error: API response-ka "
+            "JSON sax ah ma aha."
+        )
+
+    # -----------------------------------------------------
+    # EXTRACT WEATHER DATA
+    # -----------------------------------------------------
+
+    try:
+        location_name = data.get(
+            "name",
+            city,
+        )
+
+        country = (
+            data.get("sys", {})
+            .get("country", "")
+        )
+
+        main_data = data.get(
+            "main",
+            {}
+        )
+
+        temperature = main_data.get(
+            "temp"
+        )
+
+        feels_like = main_data.get(
+            "feels_like"
+        )
+
+        humidity = main_data.get(
+            "humidity"
+        )
+
+        pressure = main_data.get(
+            "pressure"
+        )
+
+        weather_items = data.get(
+            "weather",
+            []
+        )
+
+        if weather_items:
+            description = weather_items[0].get(
+                "description",
+                "Unknown",
+            )
+        else:
+            description = "Unknown"
+
+        wind_data = data.get(
+            "wind",
+            {}
+        )
+
+        wind_speed = wind_data.get(
+            "speed"
+        )
+
+    except (TypeError, KeyError) as error:
+        return (
+            "Weather parsing error: "
+            f"{error}"
+        )
+
+    # -----------------------------------------------------
+    # FORMAT LOCATION
+    # -----------------------------------------------------
+
+    if country:
+        full_location = (
+            f"{location_name}, {country}"
+        )
+    else:
+        full_location = location_name
+
+    # -----------------------------------------------------
+    # FORMAT RESULT
+    # -----------------------------------------------------
+
+    lines = [
+        f"Location: {full_location}",
+    ]
+
+    if temperature is not None:
+        lines.append(
+            f"Temperature: {temperature}°C"
+        )
+
+    if feels_like is not None:
+        lines.append(
+            f"Feels like: {feels_like}°C"
+        )
+
+    lines.append(
+        f"Conditions: {description}"
+    )
+
+    if humidity is not None:
+        lines.append(
+            f"Humidity: {humidity}%"
+        )
+
+    if pressure is not None:
+        lines.append(
+            f"Pressure: {pressure} hPa"
+        )
+
+    if wind_speed is not None:
+        lines.append(
+            f"Wind speed: {wind_speed} m/s"
+        )
+
+    return "\n".join(lines)
+
+
+# =========================================================
+# OPTIONAL DIRECT TEST
+# =========================================================
+
+if __name__ == "__main__":
+    print(
+        get_weather(
+            "Mogadishu, SO"
+        )
+    )
