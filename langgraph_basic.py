@@ -1,11 +1,10 @@
 import sqlite3
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, TypedDict
 
 from langchain_core.messages import (
-    AIMessage,
     BaseMessage,
     HumanMessage,
-    ToolMessage,
+    SystemMessage,
 )
 from langchain_openai import ChatOpenAI
 
@@ -16,7 +15,11 @@ from langgraph.graph import (
     StateGraph,
 )
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
+from langgraph.prebuilt import (
+    ToolNode,
+    tools_condition,
+)
+from langgraph.types import RetryPolicy
 
 from config import MODEL
 
@@ -29,7 +32,9 @@ from langchain_tools import (
     search_emails,
 )
 
-from tools.gmail_tool import create_draft
+from tools.rag_tool import (
+    search_documents,
+)
 
 
 # =========================================================
@@ -42,10 +47,11 @@ model = ChatOpenAI(
 
 
 # =========================================================
-# SAFE READ-ONLY / NON-WRITE TOOLS
+# TOOLS
 # =========================================================
 
 tools = [
+    search_documents,
     calculator,
     current_time,
     get_weather,
@@ -55,9 +61,262 @@ tools = [
 ]
 
 
+# =========================================================
+# MODEL + TOOLS
+# =========================================================
+
 model_with_tools = model.bind_tools(
     tools
 )
+
+
+# =========================================================
+# SYSTEM PROMPT
+# =========================================================
+
+SYSTEM_PROMPT = """
+You are a reliable multi-step RAG AI assistant.
+
+Respond clearly in the same language as the user.
+
+Use conversation history to understand follow-up questions.
+
+You may use one or multiple tools when necessary.
+
+
+============================================================
+RAG / LOCAL DOCUMENTS
+============================================================
+
+Use search_documents when the user's request depends on
+information from local indexed PDFs or documents.
+
+Examples:
+
+- What does the personal development guide say about goals?
+- According to the marketing strategies PDF...
+- Summarize what the document says about communication.
+- Compare two ideas discussed in the indexed documents.
+
+Do NOT use RAG only because the topic happens to exist
+in a document.
+
+Example:
+
+"What is personal development?"
+-> answer normally
+
+"What does the personal development guide say about
+personal development?"
+-> use search_documents
+
+
+============================================================
+FOLLOW-UP DOCUMENT QUESTIONS
+============================================================
+
+Use conversation history to resolve references such as:
+
+- it
+- that
+- this
+- the previous point
+- that section
+- the document
+- there
+
+When calling search_documents, pass a clear standalone question.
+
+Example:
+
+Previous user question:
+"What does the personal development guide say about goal setting?"
+
+Follow-up:
+"Why is that important?"
+
+Good RAG tool input:
+
+"Why is goal setting important according to the
+personal development guide?"
+
+Do not send an ambiguous query such as:
+
+"Why is that important?"
+
+
+============================================================
+RAG SOURCES
+============================================================
+
+search_documents may return verified source file names
+and page numbers.
+
+Preserve those sources when relevant.
+
+Never invent source names or page numbers.
+
+Never claim that information came from a PDF unless
+the RAG tool actually returned supporting information.
+
+
+============================================================
+MULTI-STEP RAG
+============================================================
+
+You may call search_documents multiple times.
+
+Example:
+
+User:
+"Compare what the document says about customer retention
+and customer acquisition."
+
+Possible workflow:
+
+1. search_documents about customer retention
+2. search_documents about customer acquisition
+3. compare retrieved results
+4. final answer
+
+
+You may combine RAG with another tool.
+
+Example:
+
+User:
+"Find the percentage mentioned in the document and
+calculate that percentage of 500."
+
+Possible workflow:
+
+1. search_documents
+2. extract supported percentage
+3. calculator
+4. final answer
+
+Never invent a numeric value if the document did not
+provide one.
+
+
+============================================================
+CALCULATOR
+============================================================
+
+Use calculator for mathematical calculations.
+
+Use the calculator result accurately.
+
+
+============================================================
+CURRENT TIME
+============================================================
+
+Use current_time whenever the user explicitly asks
+for the current local date or time.
+
+Do not guess current time.
+
+
+============================================================
+WEATHER
+============================================================
+
+Use get_weather for current weather information,
+including:
+
+- temperature
+- humidity
+- wind
+- current conditions
+
+Use conversation history to resolve locations in
+follow-up questions when possible.
+
+
+============================================================
+GMAIL
+============================================================
+
+Use list_recent_emails when the user asks for
+latest or recent Gmail messages.
+
+Use search_emails when the user asks to locate emails
+by sender, subject, keyword, date, or Gmail search filter.
+
+Use read_email when the user asks to read, summarize,
+or analyze a specific email.
+
+For a request such as:
+
+"Find the latest email from Zapier and summarize it."
+
+Possible workflow:
+
+1. search_emails
+2. obtain Message ID
+3. read_email
+4. summarize
+5. final answer
+
+
+============================================================
+RAG ERRORS
+============================================================
+
+search_documents may return RAG_ERROR.
+
+If you receive RAG_ERROR:
+
+1. Do not claim retrieval succeeded.
+2. Do not invent document content.
+3. Explain that document retrieval failed.
+4. If the question specifically depends on local documents,
+   say the answer cannot currently be verified.
+5. Do not repeatedly call search_documents with identical
+   arguments after the same failure.
+
+
+============================================================
+GENERAL TOOL ERRORS
+============================================================
+
+Never invent tool results.
+
+Never claim a failed operation succeeded.
+
+Do not repeatedly call the same failing tool with
+identical arguments.
+
+If required information is missing, ask the user.
+
+If the requested task cannot be completed, clearly
+explain why.
+
+
+============================================================
+GMAIL SAFETY
+============================================================
+
+There is no email sending tool available.
+
+Never claim an email was sent.
+
+Do not invent Gmail messages or Gmail action results.
+
+
+============================================================
+FINAL ANSWER
+============================================================
+
+Only provide a confident final answer after all required
+tool calls have completed.
+
+For document-based answers, preserve verified sources.
+
+For general questions that do not require tools,
+answer directly.
+"""
 
 
 # =========================================================
@@ -65,83 +324,15 @@ model_with_tools = model.bind_tools(
 # =========================================================
 
 class AgentState(TypedDict):
+    """
+    messages field-ku wuxuu isticmaalaa add_messages reducer,
+    sidaas darteed messages cusub waxaa lagu daraa history-ga.
+    """
+
     messages: Annotated[
         list[BaseMessage],
         add_messages,
     ]
-
-    pending_draft_to: str
-    pending_draft_subject: str
-    pending_draft_body: str
-
-    draft_requested: bool
-    approved: bool
-
-    draft_result: str
-    error: str
-
-
-# =========================================================
-# SYSTEM INSTRUCTIONS
-# =========================================================
-
-SYSTEM_PROMPT = """
-You are a helpful multi-step AI assistant.
-
-Respond in the same language as the user.
-
-Use conversation history for follow-up questions.
-
-You have tools for:
-- calculator
-- current time
-- weather
-- recent Gmail emails
-- Gmail search
-- Gmail read
-
-You may use multiple tools sequentially.
-
-If the user asks to find an email and then read or summarize it:
-1. search_emails
-2. get the Message ID
-3. read_email
-4. answer from the returned email content
-
-If the user asks to prepare a reply:
-- read the original email first when necessary
-- prepare a professional reply
-- do not claim it was sent
-
-IMPORTANT GMAIL SAFETY:
-
-You do NOT have a send-email tool.
-
-Never claim that an email was sent.
-
-Do NOT create Gmail drafts through normal tool calls.
-
-If the user explicitly asks to SAVE or CREATE a Gmail draft,
-prepare the recipient, subject, and body in your final answer
-using exactly this machine-readable format:
-
-DRAFT_REQUEST
-TO: recipient@example.com
-SUBJECT: subject here
-BODY:
-email body here
-END_DRAFT
-
-Only produce DRAFT_REQUEST when the user explicitly asks
-to save/create a Gmail draft.
-
-If the user only asks to write or prepare a reply,
-return the reply as ordinary text.
-
-Never invent email content, sender, subject, or recipient.
-
-If a tool fails, do not claim success.
-"""
 
 
 # =========================================================
@@ -152,18 +343,15 @@ def llm_node(
     state: AgentState,
 ) -> dict:
     """
-    Model-ka u dir conversation history-ga oo dhan.
+    Conversation history-ga oo dhan u dir model-ka.
     """
-
-    messages = state["messages"]
 
     response = model_with_tools.invoke(
         [
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            *messages,
+            SystemMessage(
+                content=SYSTEM_PROMPT
+            ),
+            *state["messages"],
         ]
     )
 
@@ -172,37 +360,6 @@ def llm_node(
             response
         ]
     }
-
-
-# =========================================================
-# ROUTER AFTER LLM
-# =========================================================
-
-def route_after_llm(
-    state: AgentState,
-) -> Literal[
-    "tools",
-    "inspect_response",
-]:
-    """
-    Haddii model-ku tool call leeyahay -> tools.
-    Haddii kale -> inspect_response.
-    """
-
-    last_message = state[
-        "messages"
-    ][-1]
-
-    tool_calls = getattr(
-        last_message,
-        "tool_calls",
-        None,
-    )
-
-    if tool_calls:
-        return "tools"
-
-    return "inspect_response"
 
 
 # =========================================================
@@ -215,397 +372,16 @@ tool_node = ToolNode(
 
 
 # =========================================================
-# RESPONSE INSPECTION NODE
+# RETRY POLICY
 # =========================================================
 
-def inspect_response_node(
-    state: AgentState,
-) -> dict:
-    """
-    Hubi haddii LLM-ku soo saaray DRAFT_REQUEST.
-    """
-
-    last_message = state[
-        "messages"
-    ][-1]
-
-    content = (
-        last_message.content
-        if hasattr(last_message, "content")
-        else ""
-    )
-
-    if not isinstance(content, str):
-        return {
-            "draft_requested": False,
-        }
-
-    if "DRAFT_REQUEST" not in content:
-        return {
-            "draft_requested": False,
-        }
-
-    try:
-        draft_section = content.split(
-            "DRAFT_REQUEST",
-            1,
-        )[1]
-
-        draft_section = draft_section.split(
-            "END_DRAFT",
-            1,
-        )[0]
-
-        lines = draft_section.strip().splitlines()
-
-        to_email = ""
-        subject = ""
-        body_lines = []
-
-        reading_body = False
-
-        for line in lines:
-
-            if line.startswith("TO:"):
-                to_email = line.replace(
-                    "TO:",
-                    "",
-                    1,
-                ).strip()
-
-                continue
-
-            if line.startswith("SUBJECT:"):
-                subject = line.replace(
-                    "SUBJECT:",
-                    "",
-                    1,
-                ).strip()
-
-                continue
-
-            if line.startswith("BODY:"):
-                reading_body = True
-                continue
-
-            if reading_body:
-                body_lines.append(
-                    line
-                )
-
-        body = "\n".join(
-            body_lines
-        ).strip()
-
-        if not to_email:
-            return {
-                "draft_requested": False,
-                "error": (
-                    "Draft recipient lama helin."
-                ),
-            }
-
-        if not subject:
-            return {
-                "draft_requested": False,
-                "error": (
-                    "Draft subject lama helin."
-                ),
-            }
-
-        if not body:
-            return {
-                "draft_requested": False,
-                "error": (
-                    "Draft body lama helin."
-                ),
-            }
-
-        return {
-            "pending_draft_to": to_email,
-            "pending_draft_subject": subject,
-            "pending_draft_body": body,
-            "draft_requested": True,
-            "error": "",
-        }
-
-    except Exception as error:
-
-        return {
-            "draft_requested": False,
-            "error": (
-                f"Draft parsing error: {error}"
-            ),
-        }
-
-
-# =========================================================
-# ROUTER AFTER RESPONSE INSPECTION
-# =========================================================
-
-def route_after_inspection(
-    state: AgentState,
-) -> Literal[
-    "approval",
-    "error_handler",
-    "end",
-]:
-    """
-    Draft request jiro -> approval.
-    Error jiro -> error handler.
-    Haddii kale -> END.
-    """
-
-    if state.get("error"):
-        return "error_handler"
-
-    if state.get(
-        "draft_requested",
-        False,
-    ):
-        return "approval"
-
-    return "end"
-
-
-# =========================================================
-# HUMAN APPROVAL NODE
-# =========================================================
-
-def approval_node(
-    state: AgentState,
-) -> dict:
-    """
-    User-ka tus draft-ka ka hor save action.
-    """
-
-    print(
-        "\n========================================"
-    )
-
-    print(
-        "📧 Gmail Draft Preview\n"
-    )
-
-    print(
-        f"To: {state['pending_draft_to']}"
-    )
-
-    print(
-        f"Subject: {state['pending_draft_subject']}"
-    )
-
-    print(
-        "\nBody:\n"
-    )
-
-    print(
-        state["pending_draft_body"]
-    )
-
-    print(
-        "\n========================================"
-    )
-
-    while True:
-
-        answer = input(
-            "\nMa kaydiyaa Gmail Drafts? "
-            "(yes/no): "
-        ).strip().lower()
-
-        if answer in {
-            "yes",
-            "y",
-            "haa",
-            "h",
-        }:
-
-            return {
-                "approved": True,
-            }
-
-        if answer in {
-            "no",
-            "n",
-            "maya",
-            "m",
-        }:
-
-            return {
-                "approved": False,
-            }
-
-        print(
-            "Fadlan qor yes ama no."
-        )
-
-
-# =========================================================
-# ROUTER AFTER APPROVAL
-# =========================================================
-
-def route_after_approval(
-    state: AgentState,
-) -> Literal[
-    "create_draft",
-    "cancelled",
-]:
-
-    if state.get(
-        "approved",
-        False,
-    ):
-        return "create_draft"
-
-    return "cancelled"
-
-
-# =========================================================
-# CREATE DRAFT NODE
-# =========================================================
-
-def create_draft_node(
-    state: AgentState,
-) -> dict:
-    """
-    Gmail Draft save action.
-
-    EMAIL MA DIRAYO.
-    """
-
-    try:
-
-        result = create_draft(
-            state[
-                "pending_draft_to"
-            ],
-            state[
-                "pending_draft_subject"
-            ],
-            state[
-                "pending_draft_body"
-            ],
-        )
-
-        if (
-            "error" in result.lower()
-            and "status: draft only" not in result.lower()
-        ):
-
-            return {
-                "error": result,
-            }
-
-        return {
-            "draft_result": result,
-            "error": "",
-        }
-
-    except Exception as error:
-
-        return {
-            "error": (
-                f"Gmail draft error: {error}"
-            ),
-        }
-
-
-# =========================================================
-# ROUTER AFTER DRAFT
-# =========================================================
-
-def route_after_draft(
-    state: AgentState,
-) -> Literal[
-    "draft_success",
-    "error_handler",
-]:
-
-    if state.get("error"):
-        return "error_handler"
-
-    return "draft_success"
-
-
-# =========================================================
-# DRAFT SUCCESS NODE
-# =========================================================
-
-def draft_success_node(
-    state: AgentState,
-) -> dict:
-    """
-    Draft success message conversation-ka ku dar.
-    """
-
-    message = AIMessage(
-        content=(
-            "✅ Gmail draft-ka waa la kaydiyay.\n\n"
-            f"To: {state['pending_draft_to']}\n"
-            f"Subject: {state['pending_draft_subject']}\n\n"
-            "Email-ka LAMA DIRIN."
-        )
-    )
-
-    return {
-        "messages": [
-            message
-        ],
-        "draft_requested": False,
-    }
-
-
-# =========================================================
-# CANCELLED NODE
-# =========================================================
-
-def cancelled_node(
-    state: AgentState,
-) -> dict:
-
-    message = AIMessage(
-        content=(
-            "⛔ Draft-ka lama kaydin.\n"
-            "Email-ka lama dirin."
-        )
-    )
-
-    return {
-        "messages": [
-            message
-        ],
-        "draft_requested": False,
-    }
-
-
-# =========================================================
-# ERROR HANDLER NODE
-# =========================================================
-
-def error_handler_node(
-    state: AgentState,
-) -> dict:
-
-    error_message = (
-        state.get("error")
-        or "Khalad aan la garanayn ayaa dhacay."
-    )
-
-    message = AIMessage(
-        content=(
-            "❌ Hawsha lama dhammeystirin.\n\n"
-            f"Sababta:\n{error_message}\n\n"
-            "Wax Gmail action ah lama xaqiijin."
-        )
-    )
-
-    return {
-        "messages": [
-            message
-        ],
-        "draft_requested": False,
-    }
+llm_retry_policy = RetryPolicy(
+    initial_interval=1.0,
+    backoff_factor=2.0,
+    max_interval=8.0,
+    max_attempts=3,
+    jitter=True,
+)
 
 
 # =========================================================
@@ -613,7 +389,7 @@ def error_handler_node(
 # =========================================================
 
 connection = sqlite3.connect(
-    "langgraph_memory.db",
+    "rag_agent_memory.db",
     check_same_thread=False,
 )
 
@@ -638,6 +414,7 @@ builder = StateGraph(
 builder.add_node(
     "llm",
     llm_node,
+    retry_policy=llm_retry_policy,
 )
 
 builder.add_node(
@@ -645,39 +422,9 @@ builder.add_node(
     tool_node,
 )
 
-builder.add_node(
-    "inspect_response",
-    inspect_response_node,
-)
-
-builder.add_node(
-    "approval",
-    approval_node,
-)
-
-builder.add_node(
-    "create_draft",
-    create_draft_node,
-)
-
-builder.add_node(
-    "draft_success",
-    draft_success_node,
-)
-
-builder.add_node(
-    "cancelled",
-    cancelled_node,
-)
-
-builder.add_node(
-    "error_handler",
-    error_handler_node,
-)
-
 
 # =========================================================
-# GRAPH EDGES
+# START
 # =========================================================
 
 builder.add_edge(
@@ -686,67 +433,27 @@ builder.add_edge(
 )
 
 
+# =========================================================
+# CONDITIONAL TOOL ROUTING
+# =========================================================
+
 builder.add_conditional_edges(
     "llm",
-    route_after_llm,
+    tools_condition,
     {
         "tools": "tools",
-        "inspect_response": "inspect_response",
+        "__end__": END,
     },
 )
 
 
-# Tool result dib ugu celi LLM
+# =========================================================
+# TOOL -> LLM LOOP
+# =========================================================
+
 builder.add_edge(
     "tools",
     "llm",
-)
-
-
-builder.add_conditional_edges(
-    "inspect_response",
-    route_after_inspection,
-    {
-        "approval": "approval",
-        "error_handler": "error_handler",
-        "end": END,
-    },
-)
-
-
-builder.add_conditional_edges(
-    "approval",
-    route_after_approval,
-    {
-        "create_draft": "create_draft",
-        "cancelled": "cancelled",
-    },
-)
-
-
-builder.add_conditional_edges(
-    "create_draft",
-    route_after_draft,
-    {
-        "draft_success": "draft_success",
-        "error_handler": "error_handler",
-    },
-)
-
-
-builder.add_edge(
-    "draft_success",
-    END,
-)
-
-builder.add_edge(
-    "cancelled",
-    END,
-)
-
-builder.add_edge(
-    "error_handler",
-    END,
 )
 
 
@@ -766,6 +473,9 @@ graph = builder.compile(
 def get_config(
     thread_id: str,
 ) -> dict:
+    """
+    Thread kasta wuxuu leeyahay conversation state gaar ah.
+    """
 
     return {
         "configurable": {
@@ -782,6 +492,17 @@ def ask_agent(
     user_message: str,
     thread_id: str,
 ) -> str:
+    """
+    User message u dir Final RAG Agent-ka.
+    """
+
+    user_message = user_message.strip()
+
+    if not user_message:
+
+        raise ValueError(
+            "Message-ku madhan ma noqon karo."
+        )
 
     result = graph.invoke(
         {
@@ -789,28 +510,29 @@ def ask_agent(
                 HumanMessage(
                     content=user_message
                 )
-            ],
-
-            "pending_draft_to": "",
-            "pending_draft_subject": "",
-            "pending_draft_body": "",
-
-            "draft_requested": False,
-            "approved": False,
-
-            "draft_result": "",
-            "error": "",
+            ]
         },
         config=get_config(
             thread_id
         ),
     )
 
-    final_message = result[
-        "messages"
-    ][-1]
+    messages = result.get(
+        "messages",
+        [],
+    )
 
-    return final_message.content
+    if not messages:
+
+        return (
+            "Agent-ku jawaab ma soo saarin."
+        )
+
+    final_message = messages[-1]
+
+    return str(
+        final_message.content
+    )
 
 
 # =========================================================
@@ -820,20 +542,24 @@ def ask_agent(
 def main() -> None:
 
     print(
-        "🤖 Final LangGraph Agent waa diyaar!"
+        "🤖 FINAL RAG AGENT waa diyaar!"
     )
 
     print()
 
     print("Capabilities:")
-    print("  Calculator")
-    print("  Current Time")
-    print("  Weather")
-    print("  Gmail Recent")
-    print("  Gmail Search")
-    print("  Gmail Read")
-    print("  Gmail Draft + Human Approval")
-    print("  Persistent Conversation Memory")
+    print("  ✅ RAG document search")
+    print("  ✅ Verified PDF sources")
+    print("  ✅ Multi-step RAG")
+    print("  ✅ Calculator")
+    print("  ✅ Current time")
+    print("  ✅ Weather")
+    print("  ✅ Gmail recent")
+    print("  ✅ Gmail search")
+    print("  ✅ Gmail read")
+    print("  ✅ Persistent conversation memory")
+    print("  ✅ Tool error recovery")
+    print("  ✅ LLM retry policy")
 
     print()
 
@@ -845,7 +571,14 @@ def main() -> None:
 
     print()
 
-    current_thread = "lesson23-final"
+    current_thread = (
+        "lesson24-final-rag"
+    )
+
+    print(
+        f"Thread-ka hadda: "
+        f"{current_thread}\n"
+    )
 
     while True:
 
@@ -897,7 +630,7 @@ def main() -> None:
             continue
 
         # -------------------------------------------------
-        # EMPTY INPUT
+        # EMPTY MESSAGE
         # -------------------------------------------------
 
         if not user_message:
@@ -909,7 +642,7 @@ def main() -> None:
             continue
 
         # -------------------------------------------------
-        # RUN GRAPH
+        # RUN FINAL AGENT
         # -------------------------------------------------
 
         try:
@@ -920,7 +653,7 @@ def main() -> None:
             )
 
             print(
-                f"\nAgent: {answer}\n"
+                f"\nAgent:\n\n{answer}\n"
             )
 
         except KeyboardInterrupt:
@@ -932,12 +665,13 @@ def main() -> None:
         except Exception as error:
 
             print(
-                f"\nKhalad: {error}\n"
+                "\n❌ Final RAG Agent Error:\n"
+                f"{type(error).__name__}: {error}\n"
             )
 
 
 # =========================================================
-# START PROGRAM
+# START
 # =========================================================
 
 if __name__ == "__main__":

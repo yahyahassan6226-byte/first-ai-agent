@@ -16,14 +16,11 @@ venv/
 credentials.json
 token.json
 
-# Local RAG documents
-documents/
-
-# Chroma database
+# Vector databases
 chroma_db/
+rag_chroma_db/
 
-# LangChain persistent memory
+# Persistent memories
 langchain_memory.db*
-
-# LangGraph persistent memory
 langgraph_memory.db*
+rag_agent_memory.db*

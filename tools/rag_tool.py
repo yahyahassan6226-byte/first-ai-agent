@@ -1,150 +1,125 @@
-from pathlib import Path
+from langchain_core.tools import tool
 
-import chromadb
-from openai import OpenAI
-from pypdf import PdfReader
+from rag_query import ask_rag
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DOCUMENTS_DIR = PROJECT_ROOT / "documents"
-CHROMA_DIR = PROJECT_ROOT / "chroma_db"
+# =========================================================
+# ERROR FORMAT
+# =========================================================
 
-openai_client = OpenAI()
-
-chroma_client = chromadb.PersistentClient(
-    path=str(CHROMA_DIR)
-)
-
-collection = chroma_client.get_or_create_collection(
-    name="pdf_documents"
-)
-
-
-def extract_pdf_text(file_name: str) -> str:
-    """Ka soo saar qoraalka PDF-ga."""
-
-    pdf_path = DOCUMENTS_DIR / file_name
-
-    if not pdf_path.exists():
-        return ""
-
-    reader = PdfReader(str(pdf_path))
-
-    pages = []
-
-    for page in reader.pages:
-        text = page.extract_text()
-
-        if text:
-            pages.append(text)
-
-    return "\n".join(pages)
-
-
-def chunk_text(
-    text: str,
-    chunk_size: int = 1000,
-    overlap: int = 200,
-) -> list[str]:
-    """Qoraalka u kala jar chunks is dul saaran."""
-
-    chunks = []
-    start = 0
-
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end].strip()
-
-        if chunk:
-            chunks.append(chunk)
-
-        start += chunk_size - overlap
-
-    return chunks
-
-
-def create_embedding(text: str) -> list[float]:
-    """Qoraalka u beddel vector embedding."""
-
-    response = openai_client.embeddings.create(
-        model="text-embedding-3-small",
-        input=text,
-    )
-
-    return response.data[0].embedding
-
-
-def index_pdf(file_name: str) -> str:
-    """PDF akhri, chunk garee, kadib ChromaDB geli."""
-
-    text = extract_pdf_text(file_name)
-
-    if not text:
-        return (
-            f"Error: PDF-ga '{file_name}' lama helin "
-            "ama qoraal lagama soo saari karin."
-        )
-
-    chunks = chunk_text(text)
-
-    if not chunks:
-        return "Error: Wax chunks ah lama samayn."
-
-    for index, chunk in enumerate(chunks):
-        embedding = create_embedding(chunk)
-
-        chunk_id = f"{file_name}-{index}"
-
-        collection.upsert(
-            ids=[chunk_id],
-            documents=[chunk],
-            embeddings=[embedding],
-            metadatas=[
-                {
-                    "file_name": file_name,
-                    "chunk": index,
-                }
-            ],
-        )
+def rag_error(
+    error_type: str,
+    message: str,
+) -> str:
+    """
+    RAG errors-ka u samee format cad
+    oo Agent-ku fahmi karo.
+    """
 
     return (
-        f"PDF indexed successfully: {file_name}\n"
-        f"Chunks: {len(chunks)}"
+        "RAG_ERROR\n"
+        f"Type: {error_type}\n"
+        f"Message: {message}\n"
+        "The document search did not succeed."
     )
 
 
-def search_pdf(
-    file_name: str,
+# =========================================================
+# RAG TOOL
+# =========================================================
+
+@tool
+def search_documents(
     question: str,
-    n_results: int = 4,
 ) -> str:
-    """Ka raadi chunks-ka ugu dhow su'aasha."""
+    """
+    Search the local indexed document knowledge base.
 
-    question_embedding = create_embedding(question)
+    Use this tool when the user's request depends on
+    information contained in local PDFs/documents.
 
-    results = collection.query(
-        query_embeddings=[question_embedding],
-        n_results=n_results,
-        where={
-            "file_name": file_name,
-        },
+    Returns a grounded answer with verified sources.
+
+    If the knowledge base is unavailable or retrieval fails,
+    the tool returns RAG_ERROR instead of inventing an answer.
+    """
+
+    question = question.strip()
+
+    if not question:
+
+        return rag_error(
+            "MissingQuestion",
+            "Document search question cannot be empty.",
+        )
+
+    try:
+
+        result = ask_rag(
+            question
+        )
+
+        if not result:
+
+            return rag_error(
+                "EmptyResult",
+                "RAG pipeline returned no result.",
+            )
+
+        return str(result)
+
+    except FileNotFoundError as error:
+
+        return rag_error(
+            "KnowledgeBaseMissing",
+            str(error),
+        )
+
+    except ConnectionError as error:
+
+        return rag_error(
+            "ConnectionError",
+            str(error),
+        )
+
+    except TimeoutError as error:
+
+        return rag_error(
+            "TimeoutError",
+            str(error),
+        )
+
+    except Exception as error:
+
+        return rag_error(
+            type(error).__name__,
+            str(error),
+        )
+
+
+# =========================================================
+# MAIN TEST
+# =========================================================
+
+def main() -> None:
+
+    question = (
+        "What does the personal development "
+        "guide say about goal setting?"
     )
 
-    documents = results.get("documents", [])
+    result = search_documents.invoke(
+        {
+            "question": question,
+        }
+    )
 
-    if not documents or not documents[0]:
-        return (
-            f"Wax xog ah lagama helin PDF-ga '{file_name}'. "
-            "Hubi in marka hore la index gareeyay."
-        )
+    print(result)
 
-    chunks = documents[0]
 
-    output = []
+# =========================================================
+# START
+# =========================================================
 
-    for number, chunk in enumerate(chunks, start=1):
-        output.append(
-            f"--- Relevant Chunk {number} ---\n{chunk}"
-        )
-
-    return "\n\n".join(output)
+if __name__ == "__main__":
+    main()
