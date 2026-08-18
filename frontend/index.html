@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>First AI Agent</title>
+
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
+</head>
+
+<body>
+
+    <main class="app">
+
+        <!-- ==========================================
+             HEADER
+        =========================================== -->
+
+        <header class="header">
+
+            <div class="header-title">
+
+                <h1>
+                    First AI Agent
+                </h1>
+
+                <p>
+                    LangGraph + RAG + FastAPI
+                </p>
+
+            </div>
+
+
+            <div class="header-actions">
+
+                <div
+                    id="api-status"
+                    class="status checking"
+                >
+                    Checking API...
+                </div>
+
+                <button
+                    id="new-chat-button"
+                    class="new-chat-button"
+                    type="button"
+                >
+                    New Chat
+                </button>
+
+            </div>
+
+        </header>
+
+
+        <!-- ==========================================
+             MESSAGES
+        =========================================== -->
+
+        <section
+            id="messages"
+            class="messages"
+        >
+
+            <div class="message assistant">
+
+                <div class="message-role">
+                    Agent
+                </div>
+
+                <div class="message-content">
+                    Salaan! Waxaan ahay First AI Agent.
+                    Maxaan kaa caawin karaa?
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ==========================================
+             STREAM STATUS
+        =========================================== -->
+
+        <div
+            id="stream-status"
+            class="stream-status hidden"
+        >
+            Agent is responding...
+        </div>
+
+
+        <!-- ==========================================
+             CHAT FORM
+        =========================================== -->
+
+        <form
+            id="chat-form"
+            class="chat-form"
+        >
+
+            <textarea
+                id="message-input"
+                rows="3"
+                maxlength="10000"
+                placeholder="Qor fariintaada..."
+                required
+            ></textarea>
+
+
+            <button
+                id="send-button"
+                type="submit"
+            >
+                Send
+            </button>
+
+        </form>
+
+
+        <!-- ==========================================
+             FOOTER
+        =========================================== -->
+
+        <footer class="footer">
+
+            <span>
+                Thread:
+            </span>
+
+            <code id="thread-id">
+                New conversation
+            </code>
+
+        </footer>
+
+    </main>
+
+
+    <script src="app.js"></script>
+
+</body>
+
+</html>

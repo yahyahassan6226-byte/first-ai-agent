@@ -2,25 +2,30 @@
 __pycache__/
 *.pyc
 
-# Environment
+# Environment / Secrets
 .env
+.env.*
+!.env.example
 
 # Virtual environments
 .venv/
 venv/
 
-# VS Code
-.vscode/
-
-# Google OAuth secrets
+# Google OAuth
 credentials.json
 token.json
 
-# Vector databases
-chroma_db/
-rag_chroma_db/
-
-# Persistent memories
-langchain_memory.db*
-langgraph_memory.db*
+# Databases
 rag_agent_memory.db*
+langgraph_memory.db*
+langchain_memory.db*
+
+# Vector databases
+rag_chroma_db/
+chroma_db/
+
+# Logs
+logs/
+
+# IDE
+.vscode/
